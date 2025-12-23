@@ -1,0 +1,419 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Survey Map Viewer</title>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js"></script>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: #f0f0f0;
+        }
+        #map {
+            height: 100vh;
+            width: 100%;
+        }
+        .info-popup {
+            background: white;
+            padding: 15px;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.2);
+            max-width: 420px;
+            font-size: 13px;
+        }
+        .info-popup h3 {
+            color: #2c3e50;
+            margin-bottom: 12px;
+            font-size: 16px;
+            border-bottom: 2px solid #3498db;
+            padding-bottom: 8px;
+        }
+        .info-row {
+            display: flex;
+            flex-direction: column;
+            margin: 10px 0;
+            padding: 8px 0;
+            border-bottom: 1px solid #ecf0f1;
+        }
+        .info-row:last-child {
+            border-bottom: none;
+        }
+        .info-label {
+            font-weight: bold;
+            color: #2980b9;
+            font-size: 12px;
+            margin-bottom: 3px;
+        }
+        .info-value {
+            color: #34495e;
+            word-break: break-word;
+            font-size: 13px;
+        }
+        .survey-marker {
+            background: #3498db;
+            border: 2px solid white;
+            border-radius: 50%;
+            width: 35px;
+            height: 35px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: white;
+            font-weight: bold;
+            font-size: 12px;
+            cursor: pointer;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.3);
+            transition: all 0.2s;
+        }
+        .survey-marker:hover {
+            background: #2980b9;
+            transform: scale(1.25);
+        }
+        .control-panel {
+            position: absolute;
+            top: 10px;
+            right: 10px;
+            background: white;
+            padding: 15px;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.2);
+            z-index: 999;
+            max-width: 320px;
+        }
+        .control-panel h2 {
+            color: #2c3e50;
+            font-size: 16px;
+            margin-bottom: 10px;
+        }
+        .file-input-wrapper {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 10px;
+        }
+        input[type="file"] {
+            flex: 1;
+            padding: 8px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            font-size: 12px;
+        }
+        button {
+            padding: 8px 15px;
+            background: #27ae60;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-weight: bold;
+            font-size: 12px;
+        }
+        button:hover {
+            background: #229954;
+        }
+        .stats {
+            margin-top: 10px;
+            padding: 10px;
+            background: #e8f8f5;
+            border-radius: 4px;
+            font-size: 12px;
+            color: #27ae60;
+            border-left: 4px solid #27ae60;
+            display: none;
+        }
+        .stats.visible {
+            display: block;
+        }
+        .legend {
+            margin-top: 10px;
+            padding: 10px;
+            background: #ebf5fb;
+            border-radius: 4px;
+            font-size: 12px;
+            border-left: 4px solid #3498db;
+        }
+        .loading {
+            color: #e74c3c;
+            font-weight: bold;
+            font-size: 11px;
+            margin-top: 5px;
+        }
+    </style>
+</head>
+<body>
+    <div id="map"></div>
+    
+    <div class="control-panel">
+        <h2>📍 Survey Map</h2>
+        <div id="stats" class="stats" style="display:none;">
+            <div>📌 <strong><span id="pointCount">0</span></strong> survey points loaded</div>
+        </div>
+        <div id="loading" style="display:block; color: #e74c3c; font-weight: bold; font-size: 11px;">Loading KMZ file...</div>
+        <div id="error" style="color: #e74c3c; background: #fadbd8; padding: 10px; border-radius: 4px; margin-top: 10px; display: none;"></div>
+        <div class="legend">
+            <strong>✓ Auto-loaded from 18623.KMZ</strong><br>
+            Click any point to view details
+        </div>
+    </div>
+
+    <script>
+        // Initialize map
+        const map = L.map('map').setView([12.867, 77.564], 16);
+        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+            attribution: '© OpenStreetMap',
+            maxZoom: 19
+        }).addTo(map);
+
+        let markers = [];
+        const dummyDetails = [
+            { surveyType: "Residential", status: "Approved", year: "2023" },
+            { surveyType: "Commercial", status: "Pending", year: "2024" },
+            { surveyType: "Residential", status: "Approved", year: "2023" },
+            { surveyType: "Mixed Use", status: "Approved", year: "2023" },
+            { surveyType: "Residential", status: "Approved", year: "2023" },
+            { surveyType: "Residential", status: "Rejected", year: "2023" },
+            { surveyType: "Commercial", status: "Approved", year: "2024" },
+            { surveyType: "Residential", status: "Approved", year: "2023" },
+            { surveyType: "Residential", status: "Pending", year: "2024" },
+            { surveyType: "Mixed Use", status: "Approved", year: "2023" }
+        ];
+
+        // Load KML directly from KMZ (ZIP format)
+        async function loadKMZFile(kmzPath) {
+            try {
+                const response = await fetch(kmzPath);
+                if (!response.ok) throw new Error(`Failed to load KMZ file: ${response.statusText}`);
+                
+                const arrayBuffer = await response.arrayBuffer();
+                const zip = new JSZip();
+                const loadedZip = await zip.loadAsync(arrayBuffer);
+                
+                let kmlContent = null;
+                for (const [filename, file] of Object.entries(loadedZip.files)) {
+                    if (filename.toLowerCase().endsWith('.kml') && !file.dir) {
+                        kmlContent = await file.async('text');
+                        break;
+                    }
+                }
+                
+                if (!kmlContent) throw new Error('No KML file found in KMZ');
+                return kmlContent;
+            } catch (error) {
+                throw new Error('Error loading KMZ: ' + error.message);
+            }
+        }
+        
+        // Load KML from local file input
+        async function loadKMLFromFile(file) {
+            try {
+                const arrayBuffer = await file.arrayBuffer();
+                const zip = new JSZip();
+                const loadedZip = await zip.loadAsync(arrayBuffer);
+                
+                let kmlContent = null;
+                for (const [filename, entry] of Object.entries(loadedZip.files)) {
+                    if (filename.toLowerCase().endsWith('.kml') && !entry.dir) {
+                        kmlContent = await entry.async('text');
+                        break;
+                    }
+                }
+                
+                if (!kmlContent) throw new Error('No KML file found in archive');
+                return kmlContent;
+            } catch (error) {
+                throw new Error('Error processing file: ' + error.message);
+            }
+        }
+
+        // Parse KML and extract point features
+        function parseKML(kmlString) {
+            const parser = new DOMParser();
+            const xmlDoc = parser.parseFromString(kmlString, 'text/xml');
+            
+            if (xmlDoc.getElementsByTagName('parsererror').length > 0) {
+                throw new Error('Error parsing KML file');
+            }
+
+            const points = [];
+            const placemarks = xmlDoc.getElementsByTagName('Placemark');
+
+            for (let i = 0; i < placemarks.length; i++) {
+                const placemark = placemarks[i];
+                const pointEl = placemark.getElementsByTagName('Point')[0];
+                
+                if (!pointEl) continue;
+
+                const coordinates = pointEl.getElementsByTagName('coordinates')[0];
+                if (!coordinates) continue;
+
+                const coordText = coordinates.textContent.trim();
+                const [lon, lat] = coordText.split(',').map(Number);
+
+                if (!lon || !lat) continue;
+
+                const nameEl = placemark.getElementsByTagName('name')[0];
+                const name = nameEl ? nameEl.textContent.trim() : 'Unnamed';
+
+                // Skip unnamed or zero points
+                if (!name || name === '0' || name === 'Unnamed') continue;
+
+                points.push({
+                    name: name,
+                    lat: lat,
+                    lon: lon
+                });
+            }
+
+            return points;
+        }
+
+        // Reverse geocode using Nominatim (OpenStreetMap)
+        async function getAddress(lat, lon) {
+            try {
+                const response = await fetch(
+                    `https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lon}`,
+                    { headers: { 'Accept-Language': 'en' } }
+                );
+                const data = await response.json();
+                const addr = data.address || {};
+                const street = addr.road || addr.street || '';
+                const area = addr.neighbourhood || addr.suburb || addr.city_district || '';
+                const city = addr.city || 'Bangalore';
+                
+                let fullAddress = [];
+                if (street) fullAddress.push(street);
+                if (area) fullAddress.push(area);
+                fullAddress.push(city);
+                
+                return fullAddress.filter(Boolean).join(', ') || `Coordinates: ${lat.toFixed(4)}, ${lon.toFixed(4)}`;
+            } catch (error) {
+                return `Coordinates: ${lat.toFixed(4)}, ${lon.toFixed(4)}`;
+            }
+        }
+
+        // Create popup content
+        function createPopupContent(point, address) {
+            const detail = dummyDetails[parseInt(point.name) % dummyDetails.length];
+            
+            let html = `<div class="info-popup">`;
+            html += `<h3>📍 Survey Plot ${point.name}</h3>`;
+            html += `<div class="info-row">
+                <span class="info-label">📍 Address:</span>
+                <span class="info-value"><strong>${address}</strong></span>
+            </div>`;
+            html += `<div class="info-row">
+                <span class="info-label">Survey Type:</span>
+                <span class="info-value">${detail.surveyType}</span>
+            </div>`;
+            html += `<div class="info-row">
+                <span class="info-label">Status:</span>
+                <span class="info-value">${detail.status}</span>
+            </div>`;
+            html += `<div class="info-row">
+                <span class="info-label">Survey Year:</span>
+                <span class="info-value">${detail.year}</span>
+            </div>`;
+            html += `<div class="info-row">
+                <span class="info-label">Coordinates:</span>
+                <span class="info-value">${point.lat.toFixed(6)}, ${point.lon.toFixed(6)}</span>
+            </div>`;
+            html += `</div>`;
+            return html;
+        }
+
+        // Display all survey points
+        async function displayPoints(surveyPoints) {
+            markers.forEach(marker => map.removeLayer(marker));
+            markers = [];
+
+            for (let point of surveyPoints) {
+                const address = await getAddress(point.lat, point.lon);
+
+                const customIcon = L.divIcon({
+                    html: `<div class="survey-marker">${point.name}</div>`,
+                    className: '',
+                    iconSize: [35, 35],
+                    iconAnchor: [17.5, 17.5]
+                });
+
+                const marker = L.marker([point.lat, point.lon], { icon: customIcon })
+                    .bindPopup(createPopupContent(point, address), { maxWidth: 420 })
+                    .addTo(map);
+
+                marker.on('click', function() {
+                    this.openPopup();
+                });
+
+                markers.push(marker);
+            }
+
+            if (markers.length > 0) {
+                const group = new L.featureGroup(markers);
+                map.fitBounds(group.getBounds().pad(0.05));
+            }
+
+            document.getElementById('pointCount').textContent = surveyPoints.length;
+            document.getElementById('stats').style.display = 'block';
+            document.getElementById('loading').style.display = 'none';
+        }
+
+        // Load KMZ on page load
+        async function init() {
+            try {
+                const kmlContent = await loadKMZFile('18623.KMZ');
+                const surveyPoints = parseKML(kmlContent);
+                
+                if (surveyPoints.length === 0) {
+                    throw new Error('No survey points found in the file');
+                }
+
+                await displayPoints(surveyPoints);
+            } catch (error) {
+                document.getElementById('loading').style.display = 'none';
+                document.getElementById('error').style.display = 'block';
+                document.getElementById('error').textContent = '❌ ' + error.message;
+                console.error(error);
+            }
+        }
+        
+        // File input handler
+        document.addEventListener('DOMContentLoaded', () => {
+            const kmzInput = document.getElementById('kmzFileInput');
+            if (kmzInput) {
+                kmzInput.addEventListener('change', async (e) => {
+                    try {
+                        const file = e.target.files[0];
+                        if (!file) return;
+                        
+                        document.getElementById('loading').style.display = 'block';
+                        document.getElementById('error').style.display = 'none';
+                        
+                        const kmlContent = await loadKMLFromFile(file);
+                        const surveyPoints = parseKML(kmlContent);
+                        
+                        if (surveyPoints.length === 0) {
+                            throw new Error('No survey points found in the file');
+                        }
+
+                        await displayPoints(surveyPoints);
+                    } catch (error) {
+                        document.getElementById('loading').style.display = 'none';
+                        document.getElementById('error').style.display = 'block';
+                        document.getElementById('error').textContent = '❌ ' + error.message;
+                        console.error(error);
+                    }
+                });
+            }
+        });
+
+        window.addEventListener('load', init);
+    </script>
+</body>
+</html>

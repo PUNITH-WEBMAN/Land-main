@@ -1,0 +1,457 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>KMZ Color Editor</title>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css" />
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@tmcw/togeojson@5.8.0/dist/togeojson.umd.js"></script>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+            background: #f5f5f5;
+        }
+        .container {
+            display: flex;
+            height: 100vh;
+        }
+        .sidebar {
+            width: 350px;
+            background: white;
+            border-right: 1px solid #e0e0e0;
+            display: flex;
+            flex-direction: column;
+            overflow-y: auto;
+        }
+        .sidebar-header {
+            padding: 20px;
+            border-bottom: 1px solid #e0e0e0;
+        }
+        .sidebar-header h2 {
+            font-size: 18px;
+            margin-bottom: 15px;
+        }
+        .file-input-wrapper {
+            margin-bottom: 15px;
+        }
+        .file-input-wrapper input {
+            display: none;
+        }
+        .file-input-label {
+            display: block;
+            padding: 10px 15px;
+            background: #2563eb;
+            color: white;
+            border-radius: 6px;
+            cursor: pointer;
+            text-align: center;
+            font-weight: 500;
+        }
+        .file-input-label:hover {
+            background: #1d4ed8;
+        }
+        .save-btn {
+            display: block;
+            padding: 10px 15px;
+            background: #059669;
+            color: white;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            font-weight: 500;
+            width: 100%;
+        }
+        .save-btn:hover {
+            background: #047857;
+        }
+        .save-btn:disabled {
+            background: #d1d5db;
+            cursor: not-allowed;
+        }
+        .features-list {
+            flex: 1;
+            overflow-y: auto;
+            padding: 15px;
+        }
+        .feature-item {
+            background: #f9fafb;
+            border: 1px solid #e5e7eb;
+            border-radius: 6px;
+            padding: 12px;
+            margin-bottom: 10px;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+        .feature-item:hover {
+            background: #f3f4f6;
+            border-color: #d1d5db;
+        }
+        .feature-item.selected {
+            background: #dbeafe;
+            border-color: #2563eb;
+        }
+        .feature-name {
+            font-weight: 600;
+            font-size: 14px;
+            margin-bottom: 8px;
+        }
+        .feature-controls {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+        .control-row {
+            display: flex;
+            gap: 8px;
+            align-items: center;
+        }
+        .survey-input {
+            flex: 1;
+            padding: 6px 8px;
+            border: 1px solid #d1d5db;
+            border-radius: 4px;
+            font-size: 12px;
+        }
+        .color-picker {
+            width: 50px;
+            height: 36px;
+            border: 1px solid #d1d5db;
+            border-radius: 4px;
+            cursor: pointer;
+        }
+        .map {
+            flex: 1;
+            background: #e5e7eb;
+        }
+        .status {
+            padding: 10px 20px;
+            background: #f3f4f6;
+            border-top: 1px solid #e5e7eb;
+            font-size: 12px;
+            color: #666;
+        }
+        .error {
+            background: #fee2e2;
+            color: #991b1b;
+            padding: 10px 15px;
+            border-radius: 4px;
+            margin-bottom: 10px;
+        }
+        .success {
+            background: #dcfce7;
+            color: #166534;
+            padding: 10px 15px;
+            border-radius: 4px;
+            margin-bottom: 10px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="sidebar">
+            <div class="sidebar-header">
+                <h2>KMZ Color Editor</h2>
+                <div class="file-input-wrapper">
+                    <input type="file" id="kmzFile" accept=".kmz" />
+                    <label for="kmzFile" class="file-input-label">Load KMZ</label>
+                </div>
+                <button class="save-btn" id="saveBtn" disabled>Save KMZ</button>
+                <div id="message" style="margin-top: 10px;"></div>
+            </div>
+            <div class="features-list" id="featuresList"></div>
+        </div>
+        <div id="map" class="map"></div>
+        <div id="legend" style="position: absolute; bottom: 20px; right: 20px; background: white; padding: 15px; border-radius: 8px; border: 1px solid #e0e0e0; max-width: 250px; max-height: 300px; overflow-y: auto; z-index: 1000; box-shadow: 0 2px 8px rgba(0,0,0,0.1);"></div>
+    </div>
+
+    <script>
+        let map;
+        let geojson;
+        let features = [];
+        let selectedFeatureIdx = -1;
+        let layers = {};
+
+        const COLOR_PRESETS = [
+            '#FF5733', '#33FF57', '#3357FF', '#FF33F5', '#F5FF33',
+            '#FF8C33', '#33FFF5', '#FF3333', '#33FF8C', '#8CFF33'
+        ];
+
+        // Initialize map
+        map = L.map('map').setView([12.867, 77.564], 14);
+        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+            attribution: '© OpenStreetMap contributors',
+            maxZoom: 19
+        }).addTo(map);
+
+        // Load KMZ
+        document.getElementById('kmzFile').addEventListener('change', async (e) => {
+            const file = e.target.files[0];
+            if (!file) return;
+
+            try {
+                const arrayBuffer = await file.arrayBuffer();
+                const zip = new JSZip();
+                const loadedZip = await zip.loadAsync(arrayBuffer);
+
+                let kmlString = null;
+                for (const [filename, zipFile] of Object.entries(loadedZip.files)) {
+                    if (filename.toLowerCase().endsWith('.kml') && !zipFile.dir) {
+                        kmlString = await zipFile.async('text');
+                        break;
+                    }
+                }
+
+                if (!kmlString) throw new Error('No KML found in KMZ');
+
+                const parser = new DOMParser();
+                const kmlDoc = parser.parseFromString(kmlString, 'text/xml');
+                const tg = (window.toGeoJSON || window.togeojson);
+                if (!tg) throw new Error('toGeoJSON library failed to load');
+                geojson = tg.kml(kmlDoc);
+
+                loadFeatures();
+                document.getElementById('saveBtn').disabled = false;
+                showMessage('KMZ loaded successfully!', 'success');
+            } catch (err) {
+                showMessage('Error loading KMZ: ' + err.message, 'error');
+            }
+        });
+
+        function loadFeatures() {
+            features = geojson.features.filter(f => 
+                f.geometry?.type === 'Polygon' || f.geometry?.type === 'MultiPolygon'
+            );
+
+            // Clear map
+            Object.values(layers).forEach(layer => map.removeLayer(layer));
+            layers = {};
+
+            // Render features
+            renderFeaturesList();
+            renderFeaturesOnMap();
+            updateLegend();
+        }
+
+        function renderFeaturesList() {
+            const list = document.getElementById('featuresList');
+            list.innerHTML = '';
+
+            features.forEach((feature, idx) => {
+                const name = feature.properties?.Name || feature.properties?.name || `Polygon ${idx + 1}`;
+                const fillColor = feature.properties?.['fill'] || '#FF5733';
+                const surveyNumber = feature.properties?.['survey-number'] || '';
+
+                const item = document.createElement('div');
+                item.className = 'feature-item' + (idx === selectedFeatureIdx ? ' selected' : '');
+                item.innerHTML = `
+                    <div class="feature-name">${name}</div>
+                    <div class="feature-controls">
+                        <div class="control-row">
+                            <label style="font-size: 11px; color: #666; width: 60px;">Survey #:</label>
+                            <input type="text" class="survey-input" value="${surveyNumber}" placeholder="e.g. 37" />
+                        </div>
+                        <div class="control-row">
+                            <input type="color" class="color-picker" value="${fillColor}" />
+                            <span style="flex: 1; font-size: 12px; color: #666;">${fillColor}</span>
+                        </div>
+                    </div>
+                `;
+
+                const surveyInput = item.querySelector('.survey-input');
+                surveyInput.addEventListener('change', (e) => {
+                    feature.properties['survey-number'] = e.target.value.trim();
+                });
+
+                const colorInput = item.querySelector('.color-picker');
+                colorInput.addEventListener('change', (e) => {
+                    const color = e.target.value;
+                    feature.properties['fill'] = color;
+                    renderFeaturesOnMap();
+                    item.querySelector('span').textContent = color;
+                    updateLegend();
+                });
+
+                item.addEventListener('click', () => {
+                    document.querySelectorAll('.feature-item').forEach(el => el.classList.remove('selected'));
+                    item.classList.add('selected');
+                    selectedFeatureIdx = idx;
+                    map.fitBounds(L.geoJSON(feature).getBounds().pad(0.1));
+                });
+
+                list.appendChild(item);
+            });
+        }
+
+        function renderFeaturesOnMap() {
+            Object.values(layers).forEach(layer => map.removeLayer(layer));
+            layers = {};
+
+            features.forEach((feature, idx) => {
+                const fillColor = feature.properties?.['fill'] || '#FF5733';
+                const surveyNumber = feature.properties?.['survey-number'] || '';
+                const isVisible = surveyNumber ? (document.querySelector(`input[data-survey="${surveyNumber}"]`)?.checked ?? true) : true;
+
+                const layer = L.geoJSON(feature, {
+                    style: {
+                        color: fillColor,
+                        weight: 2,
+                        opacity: 0.8,
+                        fillColor: fillColor,
+                        fillOpacity: 0.5
+                    }
+                });
+
+                if (isVisible) {
+                    layer.addTo(map);
+                }
+                layers[idx] = layer;
+            });
+        }
+
+        function updateLegend() {
+            const legendDiv = document.getElementById('legend');
+            const surveyGroups = {};
+
+            features.forEach(feature => {
+                const surveyNumber = feature.properties?.['survey-number'] || 'Unassigned';
+                if (!surveyGroups[surveyNumber]) {
+                    surveyGroups[surveyNumber] = [];
+                }
+                surveyGroups[surveyNumber].push(feature);
+            });
+
+            let html = '<div style="font-weight: 600; margin-bottom: 10px; font-size: 13px;">Legend</div>';
+            Object.keys(surveyGroups).sort().forEach(surveyNumber => {
+                const features = surveyGroups[surveyNumber];
+                const color = features[0]?.properties?.['fill'] || '#FF5733';
+                const count = features.length;
+
+                html += `
+                    <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px; padding: 6px; background: #f9fafb; border-radius: 4px;">
+                        <input type="checkbox" data-survey="${surveyNumber}" checked style="cursor: pointer;" />
+                        <div style="width: 16px; height: 16px; background: ${color}; border: 1px solid #999; border-radius: 2px;"></div>
+                        <span style="font-size: 12px; flex: 1;">Survey ${surveyNumber} <span style="color: #999;">(${count})</span></span>
+                    </div>
+                `;
+            });
+
+            legendDiv.innerHTML = html;
+
+            // Add checkbox listeners
+            legendDiv.querySelectorAll('input[type="checkbox"]').forEach(checkbox => {
+                checkbox.addEventListener('change', () => {
+                    renderFeaturesOnMap();
+                });
+            });
+        }
+
+        document.getElementById('saveBtn').addEventListener('click', async () => {
+            if (!geojson) return;
+
+            try {
+                // Build KML from updated features
+                const kml = buildKML(geojson.features);
+
+                // Create KMZ
+                const zip = new JSZip();
+                zip.file('doc.kml', kml);
+                const blob = await zip.generateAsync({ type: 'blob' });
+
+                // Download
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = '18623_colored.kmz';
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+                URL.revokeObjectURL(url);
+
+                showMessage('KMZ saved successfully!', 'success');
+            } catch (err) {
+                showMessage('Error saving KMZ: ' + err.message, 'error');
+            }
+        });
+
+        function buildKML(features) {
+            let kml = `<?xml version="1.0" encoding="UTF-8"?>
+<kml xmlns="http://www.opengis.net/kml/2.2">
+  <Document>
+`;
+
+            features.forEach(feature => {
+                const name = feature.properties?.Name || feature.properties?.name || 'Feature';
+                const surveyNumber = feature.properties?.['survey-number'] || '';
+                const fillColor = feature.properties?.['fill'] || 'FF5733';
+                
+                // Convert hex to KML format (AABBGGRR)
+                const hexColor = fillColor.replace('#', '');
+                const kmlColor = 'FF' + hexColor.substr(4, 2) + hexColor.substr(2, 2) + hexColor.substr(0, 2);
+
+                const coords = feature.geometry?.coordinates || [];
+                let coordString = '';
+
+                if (feature.geometry?.type === 'Polygon') {
+                    coords[0]?.forEach((c) => {
+                        coordString += `${c[0]},${c[1]},0 `;
+                    });
+                } else if (feature.geometry?.type === 'MultiPolygon') {
+                    coords[0]?.[0]?.forEach((c) => {
+                        coordString += `${c[0]},${c[1]},0 `;
+                    });
+                } else {
+                    // Skip non-polygon features
+                    return;
+                }
+
+                kml += `
+    <Placemark>
+      <name>${name}</name>
+      <ExtendedData>
+        <Data name="survey-number"><value>${surveyNumber}</value></Data>
+        <Data name="fill"><value>#${hexColor}</value></Data>
+      </ExtendedData>
+      <Style>
+        <PolyStyle>
+          <color>${kmlColor}</color>
+          <fill>1</fill>
+          <outline>1</outline>
+        </PolyStyle>
+        <LineStyle>
+          <color>FF0000</color>
+          <width>2</width>
+        </LineStyle>
+      </Style>
+      <Polygon>
+        <outerBoundaryIs>
+          <LinearRing>
+            <coordinates>
+${coordString}
+            </coordinates>
+          </LinearRing>
+        </outerBoundaryIs>
+      </Polygon>
+    </Placemark>`;
+            });
+
+            kml += `
+  </Document>
+</kml>`;
+            return kml;
+        }
+
+        function showMessage(text, type) {
+            const div = document.getElementById('message');
+            div.textContent = text;
+            div.className = type;
+            setTimeout(() => {
+                div.textContent = '';
+                div.className = '';
+            }, 3000);
+        }
+    </script>
+</body>
+</html>
