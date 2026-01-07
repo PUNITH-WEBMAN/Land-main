@@ -1,326 +1,117 @@
-// components/cdp-map.tsx
 "use client"
 
-import React, { useEffect, useRef, useState } from "react"
-import type { FeatureCollection } from "geojson"
-import "leaflet/dist/leaflet.css"
-import "leaflet-draw/dist/leaflet.draw.css"
+import { useState, useEffect, Suspense } from "react"
+import { useAuth } from "@/lib/auth-context"
+import { useRouter, useSearchParams } from "next/navigation"
+import { Header } from "@/components/header"
+import Footer from "@/components/footer"
+import { Card } from "@/components/ui/card"
+import { CDPMap } from "@/components/cdp-map"
+import { ZoneCalculations } from "@/components/zone-calculations"
+import { Layers, Info } from "lucide-react"
 
-interface CDPMapProps {
-  onPlotDataChange?: (geojson: FeatureCollection | null) => void
-  initialLat?: number
-  initialLng?: number
-  initialZoom?: number
-}
+function CDPZonesContent() {
+  const { isAuthenticated, isReady } = useAuth()
+  const router = useRouter()
+  const searchParams = useSearchParams()
+  const [plotData, setPlotData] = useState<any>(null)
 
-export function CDPMap({
-  onPlotDataChange,
-  initialLat,
-  initialLng,
-  initialZoom,
-}: CDPMapProps) {
-  const mapContainer = useRef<HTMLDivElement | null>(null)
-  const mapRef = useRef<any>(null)
-  const drawnRef = useRef<any>(null)
-  const LRef = useRef<any>(null)
-  const [searchValue, setSearchValue] = useState("")
+  const initialLat = searchParams.get("lat") ? parseFloat(searchParams.get("lat")!) : undefined
+  const initialLng = searchParams.get("lng") ? parseFloat(searchParams.get("lng")!) : undefined
+  const initialZoom = searchParams.get("zoom") ? parseInt(searchParams.get("zoom")!) : undefined
 
   useEffect(() => {
-    // run only on client
-    if (!mapContainer.current) return
-
-    let mounted = true
-    Promise.all([
-      import("leaflet"),
-      import("leaflet-draw")
-    ]).then(([LModule]) => {
-      if (!mounted) return
-      const L = LModule ? (LModule as any) : null
-      LRef.current = L
-
-      // fix default icon paths if needed (often needed in Next builds)
-      try {
-        const iconUrl = (L as any).Icon?.Default?.prototype?.options || null
-        if (iconUrl) {
-          // no-op: keep default - we don't change marker icon here
-        }
-      } catch (err) {
-        // ignore
-      }
-
-      // create map
-      if (!mapRef.current) {
-        const center = [
-          initialLat ?? 12.867,
-          initialLng ?? 77.564,
-        ]
-        const zoom = initialZoom ?? 15
-
-        mapRef.current = L.map(mapContainer.current, {
-          center,
-          zoom,
-          preferCanvas: true,
-        })
-
-        // base layers: dark-first
-        const dark = L.tileLayer("https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png", {
-          attribution: "© OpenStreetMap, © CARTO",
-          maxZoom: 19,
-        })
-        const osm = L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
-          attribution: "© OpenStreetMap",
-          maxZoom: 19,
-        })
-        const satellite = L.tileLayer(
-          "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
-          { maxZoom: 19 }
-        )
-        const topo = L.tileLayer("https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png", {
-          maxZoom: 17,
-        })
-
-        dark.addTo(mapRef.current)
-
-        const baseLayers: Record<string, any> = {
-          "Dark (Carto)": dark,
-          "Street (OSM)": osm,
-          Satellite: satellite,
-          Topo: topo,
-        }
-
-        L.control.layers(baseLayers, {}, { position: "topright", collapsed: true }).addTo(mapRef.current)
-
-        // drawn items group
-        drawnRef.current = new L.FeatureGroup()
-        mapRef.current.addLayer(drawnRef.current)
-
-        // draw control
-        const drawControl = new (L as any).Control.Draw({
-          position: "topright",
-          draw: {
-            polygon: {
-              allowIntersection: false,
-              showArea: true,
-              shapeOptions: {
-                color: "#6366F1",
-                weight: 2,
-                opacity: 0.9,
-                dashArray: null,
-                fillOpacity: 0.12,
-              },
-            },
-            polyline: false,
-            rectangle: false,
-            circle: false,
-            marker: {
-              icon: new (L as any).DivIcon({
-                className: "cdp-marker",
-                html: `<div style="width:18px;height:18px;border-radius:6px;background:#FF9933;box-shadow:0 4px 12px rgba(255,153,51,0.28)"></div>`,
-              }),
-            },
-          },
-          edit: {
-            featureGroup: drawnRef.current,
-            remove: true,
-          },
-        })
-        mapRef.current.addControl(drawControl)
-
-        // handle draw created
-        mapRef.current.on((L as any).Draw.Event.CREATED, function (e: any) {
-          const layer = e.layer
-          drawnRef.current.addLayer(layer)
-          emitGeoJSON()
-        })
-
-        mapRef.current.on((L as any).Draw.Event.EDITED, function (e: any) {
-          emitGeoJSON()
-        })
-        mapRef.current.on((L as any).Draw.Event.DELETED, function (e: any) {
-          emitGeoJSON()
-        })
-
-        // small helper for emitting geojson
-        function emitGeoJSON() {
-          try {
-            const fc = drawnRef.current.toGeoJSON() as FeatureCollection
-            if (onPlotDataChange) onPlotDataChange(fc)
-          } catch (err) {
-            if (onPlotDataChange) onPlotDataChange(null)
-          }
-        }
-
-        // when user clicks feature -> open popup with basic info
-        mapRef.current.on("click", (ev: any) => {
-          // noop - reserved for future
-        })
-
-        // make popups & controls dark/glass
-        const style = document.createElement("style")
-        style.innerHTML = `
-          .leaflet-container { background: linear-gradient(180deg,#030617,#071025); }
-          .leaflet-popup-content-wrapper {
-            background: linear-gradient(180deg, rgba(10,12,20,0.88), rgba(8,10,16,0.8));
-            color: #e6eef8;
-            border-radius: 10px;
-            border: 1px solid rgba(255,255,255,0.04);
-            box-shadow: 0 10px 30px rgba(2,6,23,0.7);
-            backdrop-filter: blur(6px) saturate(120%);
-          }
-          .leaflet-control, .leaflet-bar {
-            background: rgba(6,10,20,0.72) !important;
-            border: 1px solid rgba(255,255,255,0.04) !important;
-            backdrop-filter: blur(6px) !important;
-          }
-          .leaflet-draw-toolbar a, .leaflet-draw-toolbar a span {
-            color: white !important;
-          }
-          .cdp-marker { pointer-events:none; }
-        `
-        document.head.appendChild(style)
-      }
-    }).catch((err) => {
-      console.error("Failed to load leaflet or leaflet-draw:", err)
-    })
-
-    return () => {
-      mounted = false
-      if (mapRef.current) {
-        mapRef.current.remove()
-        mapRef.current = null
-      }
+    if (isReady && !isAuthenticated) {
+      router.push("/login")
     }
-  }, [])
+  }, [isReady, isAuthenticated, router])
 
-  // small Nominatim geocode (search) - returns first match
-  async function doGeocode(q: string) {
-    if (!q || !LRef.current || !mapRef.current) return
-    try {
-      const url = `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(q)}`
-      const r = await fetch(url, { headers: { "Accept-Language": "en" } })
-      const data = await r.json()
-      if (Array.isArray(data) && data.length > 0) {
-        const first = data[0]
-        const lat = parseFloat(first.lat)
-        const lon = parseFloat(first.lon)
-        mapRef.current.setView([lat, lon], 18)
-        // add temporary marker
-        const L = LRef.current
-        const t = L.marker([lat, lon], {
-          opacity: 0.0 // invisible marker just to center; don't persist
-        }).addTo(mapRef.current)
-        setTimeout(() => {
-          mapRef.current.removeLayer(t)
-        }, 2000)
-      }
-    } catch (err) {
-      console.warn("Geocode fail", err)
-    }
+  if (!isReady) {
+    return null
+  }
+  if (!isAuthenticated) {
+    return null
   }
 
-  // small toolbar for search and export
   return (
-    <>
-      <style>{`
-        .cdp-map-shell { width:100%; height:100%; min-height:420px; border-radius:12px; overflow:hidden; }
-        .cdp-search {
-          position: absolute;
-          top: 12px;
-          left: 12px;
-          z-index: 650;
-          display:flex;
-          gap:8px;
-          align-items:center;
-          background: linear-gradient(180deg, rgba(255,255,255,0.02), rgba(255,255,255,0.01));
-          border: 1px solid rgba(255,255,255,0.04);
-          padding: 6px;
-          border-radius: 10px;
-          backdrop-filter: blur(6px);
-        }
-        .cdp-search input {
-          background: transparent;
-          border: none;
-          outline: none;
-          color: #e6eef8;
-          width: 220px;
-        }
-        .cdp-controls {
-          position: absolute;
-          top: 12px;
-          right: 12px;
-          z-index: 650;
-        }
-        .cdp-export-btn {
-          background: linear-gradient(90deg,#2563eb,#7c3aed);
-          color: white;
-          padding: 8px 10px;
-          border-radius: 10px;
-          border: none;
-          font-weight:600;
-          cursor:pointer;
-          box-shadow: 0 8px 24px rgba(37,99,235,0.12);
-        }
-      `}</style>
-
-      <div className="relative cdp-map-shell">
-        <div className="cdp-search">
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" style={{opacity:0.9}}>
-            <path d="M21 21l-4.35-4.35" stroke="#e6eef8" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"/>
-            <circle cx="11" cy="11" r="6" stroke="#e6eef8" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"/>
-          </svg>
-          <input
-            value={searchValue}
-            onChange={(e) => setSearchValue(e.target.value)}
-            placeholder="Search address or place"
-            onKeyDown={(e) => {
-              if (e.key === "Enter") doGeocode(searchValue)
-            }}
-          />
-          <button
-            onClick={() => doGeocode(searchValue)}
-            style={{
-              background: "transparent",
-              border: "1px solid rgba(255,255,255,0.04)",
-              padding: "6px 8px",
-              borderRadius: 8,
-              color: "#e6eef8",
-              cursor: "pointer",
-            }}
-          >
-            Search
-          </button>
-        </div>
-
-        <div className="cdp-controls">
-          <button
-            className="cdp-export-btn"
-            onClick={() => {
-              if (!drawnRef.current) return
-              try {
-                const fc = drawnRef.current.toGeoJSON()
-                const s = JSON.stringify(fc)
-                const blob = new Blob([s], { type: "application/json" })
-                const url = URL.createObjectURL(blob)
-                const a = document.createElement("a")
-                a.href = url
-                a.download = "plot.geojson"
-                document.body.appendChild(a)
-                a.click()
-                a.remove()
-                URL.revokeObjectURL(url)
-              } catch (err) {
-                console.warn("Export fail", err)
-              }
-            }}
-          >
-            Export Plot
-          </button>
-        </div>
-
-        <div ref={mapContainer} style={{ width: "100%", height: "520px" }} />
+    <div className="min-h-screen flex flex-col bg-gradient-to-br from-blue-50 via-white to-purple-50">
+      {/* Holi background effects */}
+      <div className="fixed inset-0 overflow-hidden pointer-events-none z-0">
+        <div className="holi-blob holi-pink" />
+        <div className="holi-blob holi-yellow" />
+        <div className="holi-blob holi-green" />
+        <div className="holi-blob holi-purple" />
+        <div className="holi-blob holi-orange" />
       </div>
-    </>
+
+      <Header />
+
+      <main className="flex-1 py-8 relative z-10">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+          {/* Header Section */}
+          <div className="mb-8">
+            <div className="flex items-center gap-3 mb-2">
+              <Layers className="w-8 h-8 text-blue-600" />
+              <h1 className="text-3xl font-bold text-blue-900">CDP Zone Mapping & Calculator</h1>
+            </div>
+            <p className="text-gray-600">
+              Draw your plot boundary and get automatic FAR, setback, and building capacity calculations
+            </p>
+          </div>
+
+          {/* Info Card */}
+          <Card className="p-4 mb-6 bg-blue-50 border-blue-200">
+            <div className="flex gap-3">
+              <Info className="w-5 h-5 text-blue-600 flex-shrink-0 mt-0.5" />
+              <div className="text-sm text-blue-900">
+                <p className="font-semibold mb-1">How to use:</p>
+                <ul className="list-disc list-inside space-y-1">
+                  <li>Search for an address using the search bar on the map</li>
+                  <li>Use drawing tools (Freehand or Polygon) to mark your plot boundary</li>
+                  <li>Enter zone type, road width, and floor height options</li>
+                  <li>Click Calculate to get all feasible building options with FAR analysis</li>
+                  <li>Download the complete feasibility study as Excel</li>
+                </ul>
+              </div>
+            </div>
+          </Card>
+
+          {/* Main Content Grid */}
+          <div className="space-y-6">
+            {/* Map Section */}
+          <Card className="p-4 shadow-lg bg-white/95 backdrop-blur">
+              <div className="flex items-center justify-between mb-4">
+                <h2 className="text-xl font-semibold text-blue-900">Interactive CDP Map with Search</h2>
+                {/* Zone Legend */}
+                <div className="flex gap-6">
+                  <div className="flex items-center gap-2">
+                    <div className="w-6 h-6 bg-red-500 border border-red-600 rounded"></div>
+                    <span className="text-sm text-gray-700">Residential</span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <div className="w-6 h-6 bg-blue-500 border border-blue-600 rounded"></div>
+                    <span className="text-sm text-gray-700">Commercial</span>
+                  </div>
+                </div>
+              </div>
+              <CDPMap onPlotDataChange={setPlotData} initialLat={initialLat} initialLng={initialLng} initialZoom={initialZoom} />
+            </Card>
+
+            {/* Calculations Section */}
+            <ZoneCalculations plotData={plotData} />
+          </div>
+        </div>
+      </main>
+
+      <Footer />
+    </div>
   )
 }
 
-export default CDPMap
+export default function CDPZonesPage() {
+  return (
+    <Suspense fallback={<div className="min-h-screen flex items-center justify-center">Loading…</div>}>
+      <CDPZonesContent />
+    </Suspense>
+  )
+}
